@@ -1,4 +1,4 @@
 [submodule "dwsim"]
 	path = dwsim
-	url = git@github.com:ShockOfWave/dwsim.git
+	url = https://github.com/ShockOfWave/dwsim.git
 	branch = headless

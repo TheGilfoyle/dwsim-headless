@@ -8,6 +8,9 @@ namespace DwsimService.Services;
 /// </summary>
 public class DwsimEngine : IDisposable
 {
+    private const string HeadlessIntegratorId = "headless-integrator";
+    private const string HeadlessScheduleId = "headless-schedule";
+
     private readonly dynamic _auto;
     private static bool _assembliesLoaded;
     private static readonly object _loadLock = new();
@@ -45,6 +48,7 @@ public class DwsimEngine : IDisposable
                 "DWSIM.FlowsheetBase",
                 "DWSIM.FlowsheetSolver",
                 "DWSIM.SharedClasses",
+                "DWSIM.DynamicsManager",
             };
 
             foreach (var name in assemblyNames)
@@ -124,6 +128,84 @@ public class DwsimEngine : IDisposable
                 errors.Add(ex.Message.ToString());
         }
         return errors;
+    }
+
+    /// <summary>
+    /// Enable DWSIM dynamic mode and ensure a minimal integrator/schedule configuration
+    /// exists for headless step-by-step execution.
+    /// </summary>
+    public void EnsureDynamicConfiguration(dynamic flowsheet, TimeSpan initialStep)
+    {
+        dynamic manager = flowsheet.DynamicsManager;
+        dynamic integrators = manager.IntegratorList;
+        dynamic schedules = manager.ScheduleList;
+
+        if (!integrators.ContainsKey(HeadlessIntegratorId))
+        {
+            dynamic integrator = CreateDynamicsObject("DWSIM.DynamicsManager.Integrator");
+            integrator.ID = HeadlessIntegratorId;
+            integrator.Description = "Headless Integrator";
+            integrator.IntegrationStep = initialStep;
+            integrator.Duration = initialStep;
+            integrator.CalculationRateEquilibrium = 1;
+            integrator.CalculationRatePressureFlow = 1;
+            integrator.CalculationRateControl = 1;
+            integrator.RealTime = false;
+            integrators.Add(HeadlessIntegratorId, integrator);
+        }
+
+        if (!schedules.ContainsKey(HeadlessScheduleId))
+        {
+            dynamic schedule = CreateDynamicsObject("DWSIM.DynamicsManager.Schedule");
+            schedule.ID = HeadlessScheduleId;
+            schedule.Description = "Headless Schedule";
+            schedule.CurrentIntegrator = HeadlessIntegratorId;
+            schedule.UseCurrentStateAsInitial = true;
+            schedule.ResetContentsOfAllObjects = false;
+            schedules.Add(HeadlessScheduleId, schedule);
+        }
+
+        manager.CurrentSchedule = HeadlessScheduleId;
+        flowsheet.DynamicMode = true;
+
+        try { flowsheet.FlowsheetOptions.DynamicModeEnabled = true; }
+        catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// Configure the current dynamic step before solving the flowsheet.
+    /// </summary>
+    public void ConfigureDynamicStep(
+        dynamic flowsheet,
+        TimeSpan currentTime,
+        TimeSpan integrationStep,
+        bool calculateEquilibrium = true,
+        bool calculatePressureFlow = true,
+        bool calculateControl = false)
+    {
+        EnsureDynamicConfiguration(flowsheet, integrationStep);
+
+        dynamic manager = flowsheet.DynamicsManager;
+        dynamic schedule = manager.ScheduleList[HeadlessScheduleId];
+        dynamic integrator = manager.IntegratorList[HeadlessIntegratorId];
+
+        schedule.CurrentIntegrator = HeadlessIntegratorId;
+        manager.CurrentSchedule = HeadlessScheduleId;
+
+        integrator.CurrentTime = DateTime.MinValue.Add(currentTime);
+        integrator.IntegrationStep = integrationStep;
+        integrator.Duration = integrationStep;
+        integrator.ShouldCalculateEquilibrium = calculateEquilibrium;
+        integrator.ShouldCalculatePressureFlow = calculatePressureFlow;
+        integrator.ShouldCalculateControl = calculateControl;
+    }
+
+    private static dynamic CreateDynamicsObject(string typeName)
+    {
+        var type = Assembly.Load("DWSIM.DynamicsManager").GetType(typeName)
+                   ?? throw new InvalidOperationException($"Type not found: {typeName}");
+        return Activator.CreateInstance(type)
+               ?? throw new InvalidOperationException($"Could not create instance of {typeName}");
     }
 
     /// <summary>Get the ObjectType enum value by name.</summary>

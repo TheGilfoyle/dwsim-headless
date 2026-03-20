@@ -9,6 +9,8 @@ namespace DwsimService.Services;
 /// </summary>
 public static class ReactorSimulationService
 {
+    private const double TimeComparisonTolerance = 1e-9;
+
     /// <summary>Run a reactor simulation and return results.</summary>
     public static ReactorSimulationResponse Simulate(
         DwsimEngine engine, ReactorSimulationRequest req)
@@ -31,7 +33,7 @@ public static class ReactorSimulationService
         var energyStream = DwsimEngine.AddObjectToFlowsheet(fs, "EnergyStream", 350, 200, "ENERGY");
 
         // 5. Create and configure reactor
-        var reactor = CreateReactor(fs, req);
+        var reactor = CreateReactor(fs, energyStream, req);
 
         // 6. Connect objects
         //    Inlet stream → Reactor inlet (port 0)
@@ -41,10 +43,21 @@ public static class ReactorSimulationService
         fs.ConnectObjects(reactor.GraphicObject, outlet.GraphicObject, 0, 0);
         fs.ConnectObjects(energyStream.GraphicObject, reactor.GraphicObject, 0, 1);
 
-        // 7. Solve
-        var errors = engine.Solve(fs, req.TimeoutSeconds);
-
         var warnings = new List<string>();
+        List<string> errors;
+        ReactorTransientProfilesResult? transientProfiles = null;
+
+        // 7. Solve
+        if (IsDynamicSimulation(req))
+        {
+            (errors, transientProfiles) = ExecuteTransientCstrSimulation(
+                engine, fs, outlet, reactor, req, warnings);
+        }
+        else
+        {
+            errors = engine.Solve(fs, req.TimeoutSeconds);
+        }
+
         if (errors.Count > 0)
         {
             return new ReactorSimulationResponse(
@@ -54,13 +67,14 @@ public static class ReactorSimulationService
                 HeatDuty: null,
                 ResidenceTime: null,
                 Profiles: null,
+                TransientProfiles: null,
                 Errors: errors,
                 Warnings: warnings
             );
         }
 
         // 8. Extract results
-        return ExtractResults(outlet, reactor, req, warnings);
+        return ExtractResults(outlet, reactor, req, warnings, transientProfiles);
     }
 
     private static void ValidateRequest(ReactorSimulationRequest req)
@@ -74,6 +88,7 @@ public static class ReactorSimulationService
         if (req.Reactions.Count == 0)
             throw new ArgumentException("At least one reaction is required.");
 
+        var simulationMode = NormalizeSimulationMode(req.SimulationMode);
         var reactorType = req.ReactorType.ToUpperInvariant();
         if (reactorType != "CSTR" && reactorType != "PFR")
             throw new ArgumentException($"Unsupported reactor type: {req.ReactorType}. Supported: CSTR, PFR.");
@@ -88,6 +103,24 @@ public static class ReactorSimulationService
             bool hasDiameter = req.ReactorDiameter > 0;
             if (!hasVolume && !(hasLength && hasDiameter))
                 throw new ArgumentException("PFR requires either ReactorVolume or both ReactorLength and ReactorDiameter.");
+        }
+
+        var thermalMode = NormalizeThermalMode(req.ThermalMode);
+        if (thermalMode == "outlet_temperature" && !req.OutletTemperature.HasValue)
+            throw new ArgumentException("OutletTemperature is required when ThermalMode is outlet_temperature.");
+
+        if (thermalMode == "defined_duty" && !req.HeatDuty.HasValue)
+            throw new ArgumentException("HeatDuty is required when ThermalMode is defined_duty.");
+
+        if (simulationMode == "dynamic")
+        {
+            if (reactorType != "CSTR")
+                throw new ArgumentException("Dynamic simulation is currently supported only for CSTR.");
+
+            if (thermalMode is "isothermal" or "outlet_temperature")
+                throw new ArgumentException("Dynamic CSTR simulation does not support isothermal or outlet_temperature thermal modes.");
+
+            ValidateTransientSettings(req.Transient);
         }
     }
 
@@ -220,7 +253,7 @@ public static class ReactorSimulationService
         }
     }
 
-    private static dynamic CreateReactor(dynamic fs, ReactorSimulationRequest req)
+    private static dynamic CreateReactor(dynamic fs, dynamic energyStream, ReactorSimulationRequest req)
     {
         var reactorType = req.ReactorType.ToUpperInvariant();
         string objectTypeName = reactorType == "CSTR" ? "RCT_CSTR" : "RCT_PFR";
@@ -236,7 +269,7 @@ public static class ReactorSimulationService
             reactor.DeltaP = req.PressureDrop;
 
         // Set thermal mode
-        var thermalMode = req.ThermalMode.ToLowerInvariant();
+        var thermalMode = NormalizeThermalMode(req.ThermalMode);
         switch (thermalMode)
         {
             case "isothermal":
@@ -246,10 +279,12 @@ public static class ReactorSimulationService
                 reactor.ReactorOperationMode = 1;  // Adiabatic
                 break;
             case "outlet_temperature":
-            case "defined_duty":
                 reactor.ReactorOperationMode = 2;  // OutletTemperature
-                if (req.OutletTemperature.HasValue)
-                    reactor.OutletTemperature = req.OutletTemperature.Value;
+                reactor.OutletTemperature = req.OutletTemperature!.Value;
+                break;
+            case "defined_duty":
+                reactor.ReactorOperationMode = 3;  // NonIsothermalNonAdiabatic
+                energyStream.EnergyFlow = req.HeatDuty!.Value;
                 break;
         }
 
@@ -288,7 +323,8 @@ public static class ReactorSimulationService
 
     private static ReactorSimulationResponse ExtractResults(
         dynamic outlet, dynamic reactor, ReactorSimulationRequest req,
-        List<string> warnings)
+        List<string> warnings,
+        ReactorTransientProfilesResult? transientProfiles = null)
     {
         // Outlet stream properties
         var outletComposition = DwsimEngine.GetPhaseComposition(outlet, req.Compounds, 102);
@@ -352,10 +388,213 @@ public static class ReactorSimulationService
             HeatDuty: heatDuty,
             ResidenceTime: residenceTime,
             Profiles: profiles,
+            TransientProfiles: transientProfiles,
             Errors: new List<string>(),
             Warnings: warnings
         );
     }
+
+    private static (List<string> Errors, ReactorTransientProfilesResult? Profiles) ExecuteTransientCstrSimulation(
+        DwsimEngine engine,
+        dynamic flowsheet,
+        dynamic outlet,
+        dynamic reactor,
+        ReactorSimulationRequest req,
+        List<string> warnings)
+    {
+        var transient = req.Transient!;
+        var requestedTimes = BuildTransientTimeline(transient);
+        if (requestedTimes.Count == 0)
+            return (new List<string>(), null);
+
+        var time = new List<double>();
+        var temperatures = new List<double>();
+        var pressures = new List<double>();
+        var compositions = req.Compounds.ToDictionary(compound => compound, _ => new List<double>());
+
+        var firstPositiveTime = requestedTimes.FirstOrDefault(t => t > TimeComparisonTolerance);
+        if (firstPositiveTime <= TimeComparisonTolerance)
+            firstPositiveTime = transient.TimeStep ?? transient.FinalTime ?? 1.0;
+
+        engine.EnsureDynamicConfiguration(flowsheet, TimeSpan.FromSeconds(firstPositiveTime));
+        ConfigureDynamicCstrReactor(reactor, transient);
+
+        var currentTime = 0.0;
+        foreach (var targetTime in requestedTimes)
+        {
+            if (Math.Abs(targetTime) <= TimeComparisonTolerance)
+            {
+                if (transient.InitializeFromInlet)
+                {
+                    AppendInitialTransientSample(req, time, temperatures, pressures, compositions);
+                }
+                else
+                {
+                    warnings.Add("Skipped transient sample at t=0 because InitializeFromInlet is false.");
+                }
+                continue;
+            }
+
+            var step = targetTime - currentTime;
+            if (step <= TimeComparisonTolerance)
+                continue;
+
+            engine.ConfigureDynamicStep(
+                flowsheet,
+                TimeSpan.FromSeconds(currentTime),
+                TimeSpan.FromSeconds(step));
+
+            var errors = engine.Solve(flowsheet, req.TimeoutSeconds);
+            if (errors.Count > 0)
+                return (errors, null);
+
+            AppendTransientOutletSample(outlet, req, targetTime, time, temperatures, pressures, compositions);
+            currentTime = targetTime;
+        }
+
+        if (time.Count == 0)
+            return (new List<string>(), null);
+
+        return (new List<string>(), new ReactorTransientProfilesResult(
+            Time: time,
+            Temperature: temperatures,
+            Pressure: pressures,
+            Compositions: compositions
+        ));
+    }
+
+    private static void ConfigureDynamicCstrReactor(
+        dynamic reactor,
+        ReactorTransientSettingsRequest transient)
+    {
+        reactor.SetDynamicProperty("Initialize using Inlet Stream", transient.InitializeFromInlet);
+        reactor.SetDynamicProperty("Reset Contents", transient.ResetContents);
+    }
+
+    private static void AppendInitialTransientSample(
+        ReactorSimulationRequest req,
+        List<double> time,
+        List<double> temperatures,
+        List<double> pressures,
+        Dictionary<string, List<double>> compositions)
+    {
+        var inlet = req.InletStreams[0];
+        time.Add(0.0);
+        temperatures.Add(inlet.Temperature);
+        pressures.Add(inlet.Pressure);
+
+        foreach (var compound in req.Compounds)
+        {
+            var value = inlet.Composition?.GetValueOrDefault(compound, 0.0) ?? 0.0;
+            compositions[compound].Add(value);
+        }
+    }
+
+    private static void AppendTransientOutletSample(
+        dynamic outlet,
+        ReactorSimulationRequest req,
+        double targetTime,
+        List<double> time,
+        List<double> temperatures,
+        List<double> pressures,
+        Dictionary<string, List<double>> compositions)
+    {
+        time.Add(targetTime);
+        temperatures.Add(DwsimEngine.TryGetDouble(outlet, "PROP_MS_0"));
+        pressures.Add(DwsimEngine.TryGetDouble(outlet, "PROP_MS_1"));
+
+        var outletComposition = DwsimEngine.GetPhaseComposition(outlet, req.Compounds, 102);
+        foreach (var compound in req.Compounds)
+            compositions[compound].Add(outletComposition.GetValueOrDefault(compound, 0.0));
+    }
+
+    private static void ValidateTransientSettings(ReactorTransientSettingsRequest? transient)
+    {
+        if (transient == null)
+            throw new ArgumentException("Transient settings are required when SimulationMode is dynamic.");
+
+        var hasTimeGrid = transient.TimeGrid is { Count: > 0 };
+        var hasTimeStep = transient.TimeStep is > 0;
+        var hasNumberOfPoints = transient.NumberOfPoints is > 1;
+
+        var configuredAxes = (hasTimeGrid ? 1 : 0) + (hasTimeStep ? 1 : 0) + (hasNumberOfPoints ? 1 : 0);
+        if (configuredAxes != 1)
+            throw new ArgumentException("Transient settings must specify exactly one of TimeGrid, TimeStep, or NumberOfPoints.");
+
+        if (hasTimeGrid)
+        {
+            for (var i = 0; i < transient.TimeGrid!.Count; i++)
+            {
+                var t = transient.TimeGrid[i];
+                if (t < 0)
+                    throw new ArgumentException("Transient TimeGrid values must be non-negative.");
+
+                if (i > 0 && t <= transient.TimeGrid[i - 1])
+                    throw new ArgumentException("Transient TimeGrid values must be strictly increasing.");
+            }
+
+            return;
+        }
+
+        if (transient.FinalTime is null or <= 0)
+            throw new ArgumentException("Transient FinalTime must be positive when TimeGrid is not provided.");
+    }
+
+    private static List<double> BuildTransientTimeline(ReactorTransientSettingsRequest transient)
+    {
+        if (transient.TimeGrid is { Count: > 0 })
+            return transient.TimeGrid.ToList();
+
+        var finalTime = transient.FinalTime!.Value;
+        var result = new List<double> { 0.0 };
+
+        if (transient.TimeStep is > 0)
+        {
+            var timeStep = transient.TimeStep.Value;
+            for (var current = timeStep; current < finalTime - TimeComparisonTolerance; current += timeStep)
+                result.Add(current);
+
+            if (Math.Abs(result[^1] - finalTime) > TimeComparisonTolerance)
+                result.Add(finalTime);
+
+            return result;
+        }
+
+        var numberOfPoints = transient.NumberOfPoints!.Value;
+        if (numberOfPoints == 2)
+        {
+            result.Add(finalTime);
+            return result;
+        }
+
+        var increment = finalTime / (numberOfPoints - 1);
+        for (var i = 1; i < numberOfPoints; i++)
+            result.Add(i * increment);
+
+        result[^1] = finalTime;
+        return result;
+    }
+
+    private static bool IsDynamicSimulation(ReactorSimulationRequest req) =>
+        NormalizeSimulationMode(req.SimulationMode) == "dynamic";
+
+    private static string NormalizeSimulationMode(string simulationMode) =>
+        simulationMode.Trim().ToLowerInvariant() switch
+        {
+            "steady_state" or "steadystate" or "steady-state" => "steady_state",
+            "dynamic" or "transient" => "dynamic",
+            _ => throw new ArgumentException($"Unsupported simulation mode: {simulationMode}. Supported: steady_state, dynamic.")
+        };
+
+    private static string NormalizeThermalMode(string thermalMode) =>
+        thermalMode.Trim().ToLowerInvariant() switch
+        {
+            "isothermal" => "isothermal",
+            "adiabatic" => "adiabatic",
+            "outlet_temperature" or "outlettemperature" => "outlet_temperature",
+            "defined_duty" or "specified_duty" or "nonisothermal_nonadiabatic" => "defined_duty",
+            _ => throw new ArgumentException($"Unsupported thermal mode: {thermalMode}. Supported: isothermal, adiabatic, outlet_temperature, defined_duty.")
+        };
 
     private static ReactorProfilesResult? ExtractPfrProfiles(
         dynamic reactor, ReactorSimulationRequest req)

@@ -32,12 +32,25 @@ public record ReactionRequest(
     double ApproachTemperature = 0.0
 );
 
+public record ReactorTransientSettingsRequest(
+    double? FinalTime = null,
+    double? TimeStep = null,
+    int? NumberOfPoints = null,
+    List<double>? TimeGrid = null,
+    bool InitializeFromInlet = true,
+    bool ResetContents = true
+);
+
 public record ReactorSimulationRequest(
     List<string> Compounds,
     string PropertyPackage,
     string ReactorType,
     List<InletStreamRequest> InletStreams,
     List<ReactionRequest> Reactions,
+
+    // Simulation mode
+    string SimulationMode = "steady_state",
+    ReactorTransientSettingsRequest? Transient = null,
 
     // Reactor geometry
     double? ReactorVolume = null,

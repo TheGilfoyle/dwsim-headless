@@ -112,10 +112,11 @@ curl http://localhost:8003/capabilities
 | `/properties/transport` | POST | Calculate transport properties |
 | `/properties/surface` | POST | Calculate surface properties |
 | `/flash/{type}` | POST | Flash equilibrium (pt, ph, ps, tvf, pvf) |
-| `/reactor/simulate` | POST | Reactor simulation |
+| `/reactor/simulate` | POST | Reactor simulation (steady-state PFR/CSTR, dynamic CSTR) |
 | `/verify-compounds` | POST | Verify compound availability |
 
 See [docs/api-contract.md](docs/api-contract.md) for the full API specification with request/response schemas.
+The reactor API supports steady-state simulations for `PFR` and `CSTR`, plus dynamic `CSTR` runs with transient time-series output.
 
 ### Environment Variables
 
