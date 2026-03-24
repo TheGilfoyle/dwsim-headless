@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 
 namespace DwsimService.Services;
 
@@ -11,13 +12,13 @@ public class DwsimEnginePool : IAsyncDisposable
     private readonly Channel<DwsimEngine> _pool;
     private readonly List<DwsimEngine> _engines = [];
 
-    public DwsimEnginePool(string dllPath, int poolSize)
+    public DwsimEnginePool(string dllPath, int poolSize, ILogger<DwsimEngine> logger)
     {
         _pool = Channel.CreateBounded<DwsimEngine>(poolSize);
 
         for (var i = 0; i < poolSize; i++)
         {
-            var engine = new DwsimEngine(dllPath);
+            var engine = new DwsimEngine(dllPath, logger);
             _engines.Add(engine);
             _pool.Writer.TryWrite(engine);
         }

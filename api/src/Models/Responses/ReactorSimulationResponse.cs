@@ -17,6 +17,13 @@ public record ReactorProfilesResult(
     Dictionary<string, List<double>> Compositions
 );
 
+public record ReactorTransientProfilesResult(
+    List<double> Time,
+    List<double> Temperature,
+    List<double> Pressure,
+    Dictionary<string, List<double>> Compositions
+);
+
 public record ReactorSimulationResponse(
     string Status,
     OutletStreamResult? OutletStream,
@@ -24,6 +31,7 @@ public record ReactorSimulationResponse(
     double? HeatDuty,
     double? ResidenceTime,
     ReactorProfilesResult? Profiles,
+    ReactorTransientProfilesResult? TransientProfiles,
     List<string> Errors,
     List<string> Warnings
 );

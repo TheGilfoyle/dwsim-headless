@@ -46,16 +46,34 @@ Returns engine metadata and the list of supported capabilities.
     "flash",
     "reactor",
     "verify_compounds"
-  ]
+  ],
+  "reactorSupport": {
+    "reactorTypes": ["CSTR", "PFR"],
+    "simulationModes": {
+      "steadyState": {
+        "supportedReactorTypes": ["CSTR", "PFR"],
+        "supportedThermalModes": ["isothermal", "adiabatic", "outlet_temperature", "defined_duty"]
+      },
+      "dynamic": {
+        "supportedReactorTypes": ["CSTR"],
+        "supportedThermalModes": ["adiabatic", "defined_duty"],
+        "constraints": [
+          "Dynamic simulation is currently supported only for CSTR.",
+          "Dynamic CSTR does not support isothermal or outlet_temperature thermal modes."
+        ]
+      }
+    }
+  }
 }
 ```
 
 | Field          | Type     | Required | Description                              |
 |----------------|----------|----------|------------------------------------------|
-| `name`         | string   | yes      | Human-readable engine name               |
-| `version`      | string   | yes      | Engine software version                  |
-| `description`  | string   | no       | Short description of capabilities        |
-| `capabilities` | string[] | yes      | List of capability identifiers (see below) |
+| `name`           | string   | yes      | Human-readable engine name               |
+| `version`        | string   | yes      | Engine software version                  |
+| `description`    | string   | no       | Short description of capabilities        |
+| `capabilities`   | string[] | yes      | List of capability identifiers (see below) |
+| `reactorSupport` | object   | no       | Optional structured reactor capability metadata for client-side validation |
 
 ---
 
@@ -306,6 +324,7 @@ Simulate a chemical reactor with specified reactions and inlet streams.
 {
   "compounds": ["Ethanol", "Water", "Acetic Acid", "Ethyl Acetate"],
   "propertyPackage": "NRTL",
+  "simulationMode": "steady_state",
   "reactorType": "PFR",
   "inletStreams": [
     {
@@ -344,14 +363,16 @@ Simulate a chemical reactor with specified reactions and inlet streams.
 |-------------------------|-----------|----------|--------------------------------------------|
 | `compounds`             | string[]  | yes      | All compounds in the system                |
 | `propertyPackage`       | string    | yes      | Thermodynamic model                        |
-| `reactorType`           | string    | yes      | `"PFR"`, `"CSTR"`, or `"Conversion"`      |
+| `simulationMode`        | string    | no       | `"steady_state"` (default) or `"dynamic"` |
+| `reactorType`           | string    | yes      | `"PFR"` or `"CSTR"`                       |
 | `inletStreams`          | object[]  | yes      | One or more inlet stream definitions       |
 | `reactions`             | object[]  | yes      | Reaction definitions                       |
+| `transient`             | object?   | no       | Required for `simulationMode="dynamic"`    |
 | `reactorVolume`         | float?    | no       | Reactor volume in m³                       |
 | `reactorLength`         | float?    | no       | Reactor length in m (PFR)                  |
 | `reactorDiameter`       | float?    | no       | Reactor diameter in m (PFR)                |
 | `numberOfTubes`         | int       | no       | Number of tubes (default: 1)               |
-| `thermalMode`           | string    | no       | `"isothermal"`, `"adiabatic"`, `"specified_duty"` |
+| `thermalMode`           | string    | no       | `"isothermal"`, `"adiabatic"`, `"outlet_temperature"`, or `"defined_duty"` |
 | `outletTemperature`     | float?    | no       | Target outlet temperature in K             |
 | `heatDuty`              | float?    | no       | Heat duty in W                             |
 | `pressureDrop`          | float     | no       | Pressure drop in Pa (default: 0)           |
@@ -390,6 +411,23 @@ Simulate a chemical reactor with specified reactions and inlet streams.
 | `keqExpression`        | string | no       | Equilibrium constant expression            |
 | `approachTemperature`  | float  | no       | Approach temperature for equilibrium in K  |
 
+**Transient Settings:**
+
+| Field                 | Type     | Required | Description |
+|-----------------------|----------|----------|-------------|
+| `finalTime`           | float?   | depends  | Final simulation time in seconds. Required unless `timeGrid` is provided |
+| `timeStep`            | float?   | depends  | Uniform output step in seconds. Mutually exclusive with `numberOfPoints` and `timeGrid` |
+| `numberOfPoints`      | int?     | depends  | Uniform number of output points including `t=0` and `finalTime` |
+| `timeGrid`            | float[]? | depends  | Explicit monotonically increasing output times in seconds |
+| `initializeFromInlet` | bool     | no       | Initialize reactor holdup from inlet conditions (default: `true`) |
+| `resetContents`       | bool     | no       | Reset reactor holdup before the transient run (default: `true`) |
+
+Dynamic simulation currently supports `CSTR` only. For dynamic `CSTR`, `thermalMode` must be `adiabatic` or `defined_duty`.
+For practical runtime protection, dynamic output is limited to at most `500` time points regardless of whether the grid is provided via `timeGrid`, `numberOfPoints`, or derived from `finalTime / timeStep`.
+Additionally, `timeStep` must be at least `0.1` seconds.
+
+For interoperability, the API also accepts a small set of normalized aliases for enum-like inputs. For example, `Isothermic`, `steady-state`, `outlet temperature`, and `specified duty` are normalized to their canonical values.
+
 **Response (200 OK):**
 ```json
 {
@@ -413,6 +451,40 @@ Simulate a chemical reactor with specified reactions and inlet streams.
     "compositions": {
       "Ethanol": [0.5, 0.35, 0.2],
       "Ethyl Acetate": [0.0, 0.15, 0.3]
+    }
+  },
+  "transientProfiles": null,
+  "errors": [],
+  "warnings": []
+}
+```
+
+For dynamic `CSTR` runs, `profiles` remains `null` and `transientProfiles` is populated instead:
+
+```json
+{
+  "status": "Success",
+  "outletStream": {
+    "temperature": 348.6,
+    "pressure": 101325.0,
+    "totalFlow": 100.0,
+    "flowBasis": "molar",
+    "composition": { "Ethanol": 0.41, "Acetic Acid": 0.41, "Ethyl Acetate": 0.09, "Water": 0.09 },
+    "vaporFraction": 0.0,
+    "enthalpy": -280000.0,
+    "entropy": -165.0
+  },
+  "conversions": { "Ethanol": 0.18 },
+  "heatDuty": 0.0,
+  "residenceTime": 100.0,
+  "profiles": null,
+  "transientProfiles": {
+    "time": [0.0, 10.0, 20.0, 30.0],
+    "temperature": [350.0, 349.4, 349.0, 348.6],
+    "pressure": [101325.0, 101325.0, 101325.0, 101325.0],
+    "compositions": {
+      "Ethanol": [0.5, 0.46, 0.43, 0.41],
+      "Ethyl Acetate": [0.0, 0.04, 0.07, 0.09]
     }
   },
   "errors": [],
@@ -459,9 +531,19 @@ All endpoints use a standard error response format:
 ```json
 {
   "error": "Brief error description",
-  "detail": "Optional detailed message"
+  "detail": "Detailed message, duplicated from error for validation failures",
+  "code": "machine_readable_error_code",
+  "status": 400,
+  "suggestions": [
+    "Optional remediation hint"
+  ]
 }
 ```
+
+Additional notes:
+- `error` remains the primary human-readable error message for backward compatibility.
+- `detail` is populated for validation errors as well, so clients that historically displayed `detail` continue to work.
+- `code`, `status`, and `suggestions` are optional and may be omitted by some endpoints or implementations.
 
 HTTP status codes:
 - `400` — Invalid request parameters

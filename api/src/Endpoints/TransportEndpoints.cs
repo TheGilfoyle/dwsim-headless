@@ -1,6 +1,7 @@
 using DwsimService.Models.Requests;
 using DwsimService.Models.Responses;
 using DwsimService.Services;
+using DwsimService.Infrastructure;
 
 namespace DwsimService.Endpoints;
 
@@ -19,13 +20,14 @@ public static class TransportEndpoints
             }
             catch (ArgumentException ex)
             {
-                return Results.BadRequest(new ErrorResponse(ex.Message));
+                return ApiErrorResults.BadRequest(ex, "invalid_transport_request");
             }
             catch (Exception ex)
             {
-                return Results.Json(
-                    new ErrorResponse("Calculation failed", ex.Message),
-                    statusCode: 422);
+                return ApiErrorResults.UnprocessableEntity(
+                    "Calculation failed",
+                    ex,
+                    "transport_calculation_failed");
             }
         });
     }

@@ -6,7 +6,11 @@ var builder = WebApplication.CreateBuilder(args);
 var dllPath = Environment.GetEnvironmentVariable("DWSIM_DLL_PATH") ?? "/app/dwsim";
 var poolSize = int.TryParse(Environment.GetEnvironmentVariable("DWSIM_POOL_SIZE"), out var ps) ? ps : 4;
 
-builder.Services.AddSingleton(new DwsimEnginePool(dllPath, poolSize));
+builder.Services.AddSingleton(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<DwsimEngine>>();
+    return new DwsimEnginePool(dllPath, poolSize, logger);
+});
 builder.Services.AddEndpointsApiExplorer();
 
 var app = builder.Build();
