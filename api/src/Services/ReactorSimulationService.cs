@@ -1,5 +1,6 @@
 using DwsimService.Models.Requests;
 using DwsimService.Models.Responses;
+using DwsimService.Infrastructure;
 
 namespace DwsimService.Services;
 
@@ -50,8 +51,16 @@ public static class ReactorSimulationService
         // 7. Solve
         if (IsDynamicSimulation(req))
         {
-            (errors, transientProfiles) = ExecuteTransientCstrSimulation(
-                engine, fs, outlet, reactor, req, warnings);
+            var transientResult = ExecuteTransientCstrSimulation(
+                engine,
+                (object)fs,
+                (object)outlet,
+                (object)reactor,
+                req,
+                warnings
+            );
+            errors = transientResult.Errors;
+            transientProfiles = transientResult.Profiles;
         }
         else
         {
@@ -80,21 +89,36 @@ public static class ReactorSimulationService
     private static void ValidateRequest(ReactorSimulationRequest req)
     {
         if (req.Compounds.Count == 0)
-            throw new ArgumentException("At least one compound is required.");
+            throw ValidationError(
+                "At least one compound is required.",
+                "reactor_compounds_required",
+                "Provide at least one compound in the compounds collection.");
 
         if (req.InletStreams.Count == 0)
-            throw new ArgumentException("At least one inlet stream is required.");
+            throw ValidationError(
+                "At least one inlet stream is required.",
+                "reactor_inlet_stream_required",
+                "Provide at least one inlet stream definition.");
 
         if (req.Reactions.Count == 0)
-            throw new ArgumentException("At least one reaction is required.");
+            throw ValidationError(
+                "At least one reaction is required.",
+                "reactor_reaction_required",
+                "Provide at least one reaction definition.");
 
         var simulationMode = NormalizeSimulationMode(req.SimulationMode);
         var reactorType = req.ReactorType.ToUpperInvariant();
         if (reactorType != "CSTR" && reactorType != "PFR")
-            throw new ArgumentException($"Unsupported reactor type: {req.ReactorType}. Supported: CSTR, PFR.");
+            throw ValidationError(
+                $"Unsupported reactor type: {req.ReactorType}. Supported: CSTR, PFR.",
+                "reactor_type_unsupported",
+                "Use reactorType=\"CSTR\" or reactorType=\"PFR\".");
 
         if (reactorType == "CSTR" && (req.ReactorVolume == null || req.ReactorVolume <= 0))
-            throw new ArgumentException("ReactorVolume is required and must be positive for CSTR.");
+            throw ValidationError(
+                "ReactorVolume is required and must be positive for CSTR.",
+                "reactor_volume_required_for_cstr",
+                "Provide a positive reactorVolume value for CSTR simulations.");
 
         if (reactorType == "PFR")
         {
@@ -102,23 +126,41 @@ public static class ReactorSimulationService
             bool hasLength = req.ReactorLength > 0;
             bool hasDiameter = req.ReactorDiameter > 0;
             if (!hasVolume && !(hasLength && hasDiameter))
-                throw new ArgumentException("PFR requires either ReactorVolume or both ReactorLength and ReactorDiameter.");
+                throw ValidationError(
+                    "PFR requires either ReactorVolume or both ReactorLength and ReactorDiameter.",
+                    "reactor_geometry_required_for_pfr",
+                    "Provide reactorVolume for a compact PFR definition.",
+                    "Or provide both reactorLength and reactorDiameter for a geometric PFR definition.");
         }
 
         var thermalMode = NormalizeThermalMode(req.ThermalMode);
         if (thermalMode == "outlet_temperature" && !req.OutletTemperature.HasValue)
-            throw new ArgumentException("OutletTemperature is required when ThermalMode is outlet_temperature.");
+            throw ValidationError(
+                "OutletTemperature is required when ThermalMode is outlet_temperature.",
+                "reactor_outlet_temperature_required",
+                "Provide outletTemperature when thermalMode is outlet_temperature.");
 
         if (thermalMode == "defined_duty" && !req.HeatDuty.HasValue)
-            throw new ArgumentException("HeatDuty is required when ThermalMode is defined_duty.");
+            throw ValidationError(
+                "HeatDuty is required when ThermalMode is defined_duty.",
+                "reactor_heat_duty_required",
+                "Provide heatDuty when thermalMode is defined_duty.");
 
         if (simulationMode == "dynamic")
         {
             if (reactorType != "CSTR")
-                throw new ArgumentException("Dynamic simulation is currently supported only for CSTR.");
+                throw ValidationError(
+                    "Dynamic simulation is currently supported only for CSTR.",
+                    "reactor_dynamic_requires_cstr",
+                    "Use reactorType=\"CSTR\" for dynamic simulations.",
+                    "Or switch simulationMode to steady_state for PFR.");
 
             if (thermalMode is "isothermal" or "outlet_temperature")
-                throw new ArgumentException("Dynamic CSTR simulation does not support isothermal or outlet_temperature thermal modes.");
+                throw ValidationError(
+                    "Dynamic CSTR simulation does not support isothermal or outlet_temperature thermal modes.",
+                    "reactor_dynamic_thermal_mode_unsupported",
+                    "Use thermalMode=\"adiabatic\" or thermalMode=\"defined_duty\" for dynamic CSTR runs.",
+                    "Or switch simulationMode to steady_state for isothermal and outlet_temperature modes.");
 
             ValidateTransientSettings(req.Transient);
         }
@@ -193,7 +235,10 @@ public static class ReactorSimulationService
                     break;
 
                 default:
-                    throw new ArgumentException($"Unsupported reaction type: {rxn.Type}. Supported: Kinetic, Conversion, Equilibrium.");
+                    throw ValidationError(
+                        $"Unsupported reaction type: {rxn.Type}. Supported: Kinetic, Conversion, Equilibrium.",
+                        "reactor_reaction_type_unsupported",
+                        "Use reaction type Kinetic, Conversion, or Equilibrium.");
             }
 
             fs.AddReaction(reaction);
@@ -511,7 +556,10 @@ public static class ReactorSimulationService
     private static void ValidateTransientSettings(ReactorTransientSettingsRequest? transient)
     {
         if (transient == null)
-            throw new ArgumentException("Transient settings are required when SimulationMode is dynamic.");
+            throw ValidationError(
+                "Transient settings are required when SimulationMode is dynamic.",
+                "reactor_transient_settings_required",
+                "Provide the transient object when simulationMode is dynamic.");
 
         var hasTimeGrid = transient.TimeGrid is { Count: > 0 };
         var hasTimeStep = transient.TimeStep is > 0;
@@ -519,7 +567,10 @@ public static class ReactorSimulationService
 
         var configuredAxes = (hasTimeGrid ? 1 : 0) + (hasTimeStep ? 1 : 0) + (hasNumberOfPoints ? 1 : 0);
         if (configuredAxes != 1)
-            throw new ArgumentException("Transient settings must specify exactly one of TimeGrid, TimeStep, or NumberOfPoints.");
+            throw ValidationError(
+                "Transient settings must specify exactly one of TimeGrid, TimeStep, or NumberOfPoints.",
+                "reactor_transient_strategy_ambiguous",
+                "Specify exactly one of transient.timeGrid, transient.timeStep, or transient.numberOfPoints.");
 
         if (hasTimeGrid)
         {
@@ -527,17 +578,26 @@ public static class ReactorSimulationService
             {
                 var t = transient.TimeGrid[i];
                 if (t < 0)
-                    throw new ArgumentException("Transient TimeGrid values must be non-negative.");
+                    throw ValidationError(
+                        "Transient TimeGrid values must be non-negative.",
+                        "reactor_transient_timegrid_negative",
+                        "Ensure all transient.timeGrid values are greater than or equal to zero.");
 
                 if (i > 0 && t <= transient.TimeGrid[i - 1])
-                    throw new ArgumentException("Transient TimeGrid values must be strictly increasing.");
+                    throw ValidationError(
+                        "Transient TimeGrid values must be strictly increasing.",
+                        "reactor_transient_timegrid_not_increasing",
+                        "Provide transient.timeGrid values in strictly increasing order.");
             }
 
             return;
         }
 
         if (transient.FinalTime is null or <= 0)
-            throw new ArgumentException("Transient FinalTime must be positive when TimeGrid is not provided.");
+            throw ValidationError(
+                "Transient FinalTime must be positive when TimeGrid is not provided.",
+                "reactor_transient_final_time_invalid",
+                "Provide a positive transient.finalTime when using timeStep or numberOfPoints.");
     }
 
     private static List<double> BuildTransientTimeline(ReactorTransientSettingsRequest transient)
@@ -579,22 +639,40 @@ public static class ReactorSimulationService
         NormalizeSimulationMode(req.SimulationMode) == "dynamic";
 
     private static string NormalizeSimulationMode(string simulationMode) =>
-        simulationMode.Trim().ToLowerInvariant() switch
+        NormalizeEnumToken(simulationMode) switch
         {
-            "steady_state" or "steadystate" or "steady-state" => "steady_state",
+            "steady_state" or "steadystate" => "steady_state",
             "dynamic" or "transient" => "dynamic",
-            _ => throw new ArgumentException($"Unsupported simulation mode: {simulationMode}. Supported: steady_state, dynamic.")
+            _ => throw ValidationError(
+                $"Unsupported simulation mode: {simulationMode}. Supported: steady_state, dynamic.",
+                "reactor_simulation_mode_unsupported",
+                "Use simulationMode=\"steady_state\" or simulationMode=\"dynamic\".")
         };
 
     private static string NormalizeThermalMode(string thermalMode) =>
-        thermalMode.Trim().ToLowerInvariant() switch
+        NormalizeEnumToken(thermalMode) switch
         {
-            "isothermal" => "isothermal",
+            "isothermal" or "isothermic" => "isothermal",
             "adiabatic" => "adiabatic",
             "outlet_temperature" or "outlettemperature" => "outlet_temperature",
             "defined_duty" or "specified_duty" or "nonisothermal_nonadiabatic" => "defined_duty",
-            _ => throw new ArgumentException($"Unsupported thermal mode: {thermalMode}. Supported: isothermal, adiabatic, outlet_temperature, defined_duty.")
+            _ => throw ValidationError(
+                $"Unsupported thermal mode: {thermalMode}. Supported: isothermal, adiabatic, outlet_temperature, defined_duty.",
+                "reactor_thermal_mode_unsupported",
+                "Use thermalMode=\"isothermal\", \"adiabatic\", \"outlet_temperature\", or \"defined_duty\".")
         };
+
+    private static string NormalizeEnumToken(string value) =>
+        value.Trim()
+            .ToLowerInvariant()
+            .Replace('-', '_')
+            .Replace(' ', '_');
+
+    private static ApiValidationException ValidationError(
+        string message,
+        string code,
+        params string[] suggestions) =>
+        new(message, code, suggestions);
 
     private static ReactorProfilesResult? ExtractPfrProfiles(
         dynamic reactor, ReactorSimulationRequest req)

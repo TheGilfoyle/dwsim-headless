@@ -46,16 +46,34 @@ Returns engine metadata and the list of supported capabilities.
     "flash",
     "reactor",
     "verify_compounds"
-  ]
+  ],
+  "reactorSupport": {
+    "reactorTypes": ["CSTR", "PFR"],
+    "simulationModes": {
+      "steadyState": {
+        "supportedReactorTypes": ["CSTR", "PFR"],
+        "supportedThermalModes": ["isothermal", "adiabatic", "outlet_temperature", "defined_duty"]
+      },
+      "dynamic": {
+        "supportedReactorTypes": ["CSTR"],
+        "supportedThermalModes": ["adiabatic", "defined_duty"],
+        "constraints": [
+          "Dynamic simulation is currently supported only for CSTR.",
+          "Dynamic CSTR does not support isothermal or outlet_temperature thermal modes."
+        ]
+      }
+    }
+  }
 }
 ```
 
 | Field          | Type     | Required | Description                              |
 |----------------|----------|----------|------------------------------------------|
-| `name`         | string   | yes      | Human-readable engine name               |
-| `version`      | string   | yes      | Engine software version                  |
-| `description`  | string   | no       | Short description of capabilities        |
-| `capabilities` | string[] | yes      | List of capability identifiers (see below) |
+| `name`           | string   | yes      | Human-readable engine name               |
+| `version`        | string   | yes      | Engine software version                  |
+| `description`    | string   | no       | Short description of capabilities        |
+| `capabilities`   | string[] | yes      | List of capability identifiers (see below) |
+| `reactorSupport` | object   | no       | Optional structured reactor capability metadata for client-side validation |
 
 ---
 
@@ -406,6 +424,8 @@ Simulate a chemical reactor with specified reactions and inlet streams.
 
 Dynamic simulation currently supports `CSTR` only. For dynamic `CSTR`, `thermalMode` must be `adiabatic` or `defined_duty`.
 
+For interoperability, the API also accepts a small set of normalized aliases for enum-like inputs. For example, `Isothermic`, `steady-state`, `outlet temperature`, and `specified duty` are normalized to their canonical values.
+
 **Response (200 OK):**
 ```json
 {
@@ -509,9 +529,19 @@ All endpoints use a standard error response format:
 ```json
 {
   "error": "Brief error description",
-  "detail": "Optional detailed message"
+  "detail": "Detailed message, duplicated from error for validation failures",
+  "code": "machine_readable_error_code",
+  "status": 400,
+  "suggestions": [
+    "Optional remediation hint"
+  ]
 }
 ```
+
+Additional notes:
+- `error` remains the primary human-readable error message for backward compatibility.
+- `detail` is populated for validation errors as well, so clients that historically displayed `detail` continue to work.
+- `code`, `status`, and `suggestions` are optional and may be omitted by some endpoints or implementations.
 
 HTTP status codes:
 - `400` — Invalid request parameters

@@ -60,6 +60,47 @@ public class ReactorEndpointTests : IClassFixture<WebApplicationFactory<Program>
         Assert.True(compositions.GetProperty("Ethyl Acetate").GetArrayLength() == time.GetArrayLength());
     }
 
+    [Fact]
+    public async Task ReactorCstr_DynamicIsothermal_ReturnsStructuredValidationError()
+    {
+        var response = await _client.PostAsJsonAsync("reactor/simulate", CreateInvalidDynamicCstrRequest());
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = doc.RootElement;
+
+        var error = root.GetProperty("error").GetString();
+        Assert.Equal(
+            "Dynamic CSTR simulation does not support isothermal or outlet_temperature thermal modes.",
+            error);
+        Assert.Equal(error, root.GetProperty("detail").GetString());
+        Assert.Equal("reactor_dynamic_thermal_mode_unsupported", root.GetProperty("code").GetString());
+        Assert.Equal(400, root.GetProperty("status").GetInt32());
+
+        var suggestions = root.GetProperty("suggestions");
+        Assert.Equal(JsonValueKind.Array, suggestions.ValueKind);
+        Assert.Contains(
+            suggestions.EnumerateArray().Select(item => item.GetString()),
+            item => item == "Use thermalMode=\"adiabatic\" or thermalMode=\"defined_duty\" for dynamic CSTR runs.");
+    }
+
+    [Fact]
+    public async Task ReactorCstr_DynamicIsothermicAlias_NormalizesBeforeValidation()
+    {
+        var response = await _client.PostAsJsonAsync("reactor/simulate", CreateInvalidDynamicCstrAliasRequest());
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = doc.RootElement;
+
+        Assert.Equal(
+            "Dynamic CSTR simulation does not support isothermal or outlet_temperature thermal modes.",
+            root.GetProperty("error").GetString());
+        Assert.Equal("reactor_dynamic_thermal_mode_unsupported", root.GetProperty("code").GetString());
+    }
+
     private static object CreatePfrRequest() => new
     {
         compounds = new[] { "Ethanol", "Water", "Acetic Acid", "Ethyl Acetate" },
@@ -127,6 +168,80 @@ public class ReactorEndpointTests : IClassFixture<WebApplicationFactory<Program>
         },
         reactorVolume = 1.0,
         thermalMode = "adiabatic",
+        timeoutSeconds = 120
+    };
+
+    private static object CreateInvalidDynamicCstrRequest() => new
+    {
+        compounds = new[] { "Ethanol", "Water", "Acetic Acid", "Ethyl Acetate" },
+        propertyPackage = "NRTL",
+        reactorType = "CSTR",
+        simulationMode = "dynamic",
+        inletStreams = new[]
+        {
+            new
+            {
+                temperature = 350.0,
+                pressure = 101325.0,
+                totalFlow = 100.0,
+                flowBasis = "molar",
+                composition = new Dictionary<string, double>
+                {
+                    ["Ethanol"] = 0.5,
+                    ["Acetic Acid"] = 0.5,
+                    ["Water"] = 0.0,
+                    ["Ethyl Acetate"] = 0.0
+                }
+            }
+        },
+        reactions = new[]
+        {
+            CreateKineticReaction()
+        },
+        transient = new
+        {
+            finalTime = 30.0,
+            numberOfPoints = 4
+        },
+        reactorVolume = 1.0,
+        thermalMode = "isothermal",
+        timeoutSeconds = 120
+    };
+
+    private static object CreateInvalidDynamicCstrAliasRequest() => new
+    {
+        compounds = new[] { "Ethanol", "Water", "Acetic Acid", "Ethyl Acetate" },
+        propertyPackage = "NRTL",
+        reactorType = "CSTR",
+        simulationMode = "dynamic",
+        inletStreams = new[]
+        {
+            new
+            {
+                temperature = 350.0,
+                pressure = 101325.0,
+                totalFlow = 100.0,
+                flowBasis = "molar",
+                composition = new Dictionary<string, double>
+                {
+                    ["Ethanol"] = 0.5,
+                    ["Acetic Acid"] = 0.5,
+                    ["Water"] = 0.0,
+                    ["Ethyl Acetate"] = 0.0
+                }
+            }
+        },
+        reactions = new[]
+        {
+            CreateKineticReaction()
+        },
+        transient = new
+        {
+            finalTime = 30.0,
+            numberOfPoints = 4
+        },
+        reactorVolume = 1.0,
+        thermalMode = "Isothermic",
         timeoutSeconds = 120
     };
 
