@@ -1,6 +1,7 @@
 using DwsimService.Models.Requests;
 using DwsimService.Models.Responses;
 using DwsimService.Services;
+using DwsimService.Infrastructure;
 
 namespace DwsimService.Endpoints;
 
@@ -37,13 +38,14 @@ public static class FlashEndpoints
         }
         catch (ArgumentException ex)
         {
-            return Results.BadRequest(new ErrorResponse(ex.Message));
+            return ApiErrorResults.BadRequest(ex, "invalid_flash_request");
         }
         catch (Exception ex)
         {
-            return Results.Json(
-                new ErrorResponse("Flash calculation failed", ex.Message),
-                statusCode: 422);
+            return ApiErrorResults.UnprocessableEntity(
+                "Flash calculation failed",
+                ex,
+                "flash_calculation_failed");
         }
     }
 
