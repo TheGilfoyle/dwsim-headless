@@ -24,7 +24,29 @@ public static class CapabilitiesEndpoints
                     "reactor",
                     "verify_compounds"
                 },
-                description = "DWSIM-based thermodynamic property calculations, flash equilibrium, and reactor simulations"
+                description = "DWSIM-based thermodynamic property calculations, flash equilibrium, and reactor simulations",
+                reactorSupport = new
+                {
+                    reactorTypes = new[] { "CSTR", "PFR" },
+                    simulationModes = new
+                    {
+                        steadyState = new
+                        {
+                            supportedReactorTypes = new[] { "CSTR", "PFR" },
+                            supportedThermalModes = new[] { "isothermal", "adiabatic", "outlet_temperature", "defined_duty" }
+                        },
+                        dynamic = new
+                        {
+                            supportedReactorTypes = new[] { "CSTR" },
+                            supportedThermalModes = new[] { "adiabatic", "defined_duty" },
+                            constraints = new[]
+                            {
+                                "Dynamic simulation is currently supported only for CSTR.",
+                                "Dynamic CSTR does not support isothermal or outlet_temperature thermal modes."
+                            }
+                        }
+                    }
+                }
             });
         });
     }

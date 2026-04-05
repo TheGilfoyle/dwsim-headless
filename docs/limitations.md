@@ -17,6 +17,17 @@
 
 IronPython (`RunScript_IronPython`) **works**. Only Python.NET (`RunScript_PythonNET`) is disabled. If your scripts are written for IronPython, they will work.
 
+### Dynamic CSTR Runtime Limits
+
+Dynamic `CSTR` simulation currently advances the flowsheet sequentially for each requested output time.
+To keep API latency and resource usage predictable, the reactor endpoint applies these guardrails:
+
+- maximum `500` transient output points per request
+- minimum `timeStep` of `0.1` seconds
+
+These limits apply whether output times are provided explicitly via `timeGrid`, requested through `numberOfPoints`, or derived from `finalTime / timeStep`.
+For longer horizons, prefer a coarser output grid and post-process or resample results client-side if needed.
+
 ### SkiaSharp Drawing
 
 Flowsheet drawing via SkiaSharp **works** -- `CreateFlowsheet()` creates a fully functional `Flowsheet2` with drawing support. However, for SkiaSharp to work correctly on Linux, the following are required:

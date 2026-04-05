@@ -1,6 +1,6 @@
 using DwsimService.Models.Requests;
-using DwsimService.Models.Responses;
 using DwsimService.Services;
+using DwsimService.Infrastructure;
 
 namespace DwsimService.Endpoints;
 
@@ -19,13 +19,14 @@ public static class ReactorEndpoints
             }
             catch (ArgumentException ex)
             {
-                return Results.BadRequest(new ErrorResponse(ex.Message));
+                return ApiErrorResults.BadRequest(ex, "invalid_reactor_request");
             }
             catch (Exception ex)
             {
-                return Results.Json(
-                    new ErrorResponse("Reactor simulation failed", ex.Message),
-                    statusCode: 422);
+                return ApiErrorResults.UnprocessableEntity(
+                    "Reactor simulation failed",
+                    ex,
+                    "reactor_simulation_failed");
             }
         });
     }
