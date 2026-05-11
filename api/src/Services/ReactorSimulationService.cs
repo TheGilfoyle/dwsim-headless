@@ -317,23 +317,13 @@ public static class ReactorSimulationService
 
         // Set thermal mode
         var thermalMode = NormalizeThermalMode(req.ThermalMode);
+        SetReactorOperationMode(reactor, thermalMode);
         switch (thermalMode)
         {
-            case "isothermal":
-                reactor.ReactorOperationMode = 0;  // Isothermic
-                break;
-            case "adiabatic":
-                reactor.ReactorOperationMode = 1;  // Adiabatic
-                break;
             case "outlet_temperature":
-                reactor.ReactorOperationMode = 2;  // OutletTemperature
                 reactor.OutletTemperature = req.OutletTemperature!.Value;
                 break;
             case "defined_duty":
-                // Intentionally use DWSIM's duty-controlled mode instead of OutletTemperature.
-                // This changes previous behavior where defined_duty effectively followed the
-                // outlet-temperature path and is therefore a documented behavioral change.
-                reactor.ReactorOperationMode = 3;  // NonIsothermalNonAdiabatic
                 energyStream.EnergyFlow = req.HeatDuty!.Value;
                 break;
         }
@@ -369,6 +359,40 @@ public static class ReactorSimulationService
         }
 
         return reactor;
+    }
+
+    private static void SetReactorOperationMode(dynamic reactor, string thermalMode)
+    {
+        string operationModeName = thermalMode switch
+        {
+            "isothermal" => "Isothermic",
+            "adiabatic" => "Adiabatic",
+            "outlet_temperature" => "OutletTemperature",
+            "defined_duty" => "NonIsothermalNonAdiabatic",
+            _ => throw new InvalidOperationException(
+                $"Unexpected normalized thermal mode: {thermalMode}.")
+        };
+
+        var reactorType = ((object)reactor).GetType();
+        var prop = reactorType.GetProperty("ReactorOperationMode");
+        if (prop == null || !prop.PropertyType.IsEnum)
+        {
+            throw new InvalidOperationException(
+                "DWSIM reactor object does not expose enum ReactorOperationMode property.");
+        }
+
+        object operationModeValue;
+        try
+        {
+            operationModeValue = Enum.Parse(prop.PropertyType, operationModeName, ignoreCase: true);
+        }
+        catch (Exception ex) when (ex is ArgumentException or OverflowException)
+        {
+            throw new InvalidOperationException(
+                $"DWSIM reactor mode '{operationModeName}' is not available in enum {prop.PropertyType.FullName}.", ex);
+        }
+
+        prop.SetValue((object)reactor, operationModeValue);
     }
 
     private static ReactorSimulationResponse ExtractResults(
