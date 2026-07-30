@@ -1,4 +1,6 @@
 # Build artifacts
+**/bin/
+**/obj/
 output/*.dll
 output/*.pdb
 output/*.json

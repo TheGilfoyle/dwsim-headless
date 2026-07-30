@@ -88,7 +88,7 @@ public static class ReactorSimulationService
         return ExtractResults(outlet, reactor, req, warnings, transientProfiles);
     }
 
-    private static void ValidateRequest(ReactorSimulationRequest req)
+    internal static void ValidateRequest(ReactorSimulationRequest req)
     {
         if (req.Compounds.Count == 0)
             throw ValidationError(
@@ -121,6 +121,28 @@ public static class ReactorSimulationService
                 "ReactorVolume is required and must be positive for CSTR.",
                 "reactor_volume_required_for_cstr",
                 "Provide a positive reactorVolume value for CSTR simulations.");
+
+        var hasVaporPhaseReactions = req.Reactions.Any(r =>
+            IsVaporPhase(r.Phase));
+
+        if (reactorType != "CSTR" && req.Headspace.HasValue)
+            throw ValidationError(
+                "Headspace is supported only for CSTR reactors.",
+                "reactor_headspace_cstr_only",
+                "Remove headspace or use reactorType=\"CSTR\".");
+
+        if (reactorType == "CSTR" && req.Headspace.HasValue &&
+            (!double.IsFinite(req.Headspace.Value) || req.Headspace <= 0))
+            throw ValidationError(
+                "Headspace must be a finite positive volume.",
+                "reactor_headspace_invalid",
+                "Provide headspace greater than zero in cubic metres.");
+
+        if (reactorType == "CSTR" && hasVaporPhaseReactions && !req.Headspace.HasValue)
+            throw ValidationError(
+                "Headspace is required for CSTR vapor-phase reactions.",
+                "reactor_headspace_required_for_vapor_cstr",
+                "Provide a positive headspace volume in cubic metres.");
 
         if (reactorType == "PFR")
         {
@@ -330,7 +352,7 @@ public static class ReactorSimulationService
 
         if (reactorType == "CSTR")
         {
-            reactor.Volume = req.ReactorVolume!.Value;
+            ApplyCstrGeometry(reactor, req);
         }
         else // PFR
         {
@@ -361,7 +383,23 @@ public static class ReactorSimulationService
         return reactor;
     }
 
-    private static void SetReactorOperationMode(dynamic reactor, string thermalMode)
+    internal static void ApplyCstrGeometry(dynamic reactor, ReactorSimulationRequest req)
+    {
+        reactor.Volume = req.ReactorVolume!.Value;
+
+        if (req.Headspace.HasValue)
+            reactor.Headspace = req.Headspace.Value;
+    }
+
+    private static bool IsVaporPhase(string? phase)
+    {
+        if (string.IsNullOrWhiteSpace(phase))
+            return false;
+
+        return phase.Equals("Vapor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static void SetReactorOperationMode(dynamic reactor, string thermalMode)
     {
         string operationModeName = thermalMode switch
         {

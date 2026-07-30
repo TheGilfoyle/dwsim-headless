@@ -359,6 +359,53 @@ Simulate a chemical reactor with specified reactions and inlet streams.
 }
 ```
 
+**CSTR vapor-phase example:**
+```json
+{
+  "compounds": ["Methane", "Carbon dioxide", "Carbon monoxide", "Hydrogen"],
+  "propertyPackage": "Peng-Robinson (PR)",
+  "reactorType": "CSTR",
+  "inletStreams": [
+    {
+      "temperature": 450.0,
+      "pressure": 101325.0,
+      "totalFlow": 1.0,
+      "flowBasis": "molar",
+      "composition": {
+        "Methane": 0.5,
+        "Carbon dioxide": 0.5,
+        "Carbon monoxide": 0.0,
+        "Hydrogen": 0.0
+      }
+    }
+  ],
+  "reactions": [
+    {
+      "name": "DryMethaneReforming",
+      "type": "Kinetic",
+      "compounds": {
+        "Methane": -1.0,
+        "Carbon dioxide": -1.0,
+        "Carbon monoxide": 2.0,
+        "Hydrogen": 2.0
+      },
+      "baseCompound": "Methane",
+      "phase": "Vapor",
+      "basis": "MolarConc",
+      "aForward": 1e5,
+      "eForward": 25000.0
+    }
+  ],
+  "reactorVolume": 0.001,
+  "headspace": 0.001,
+  "thermalMode": "isothermal",
+  "pressureDrop": 0.0,
+  "convergenceTolerance": 1e-6,
+  "maxIterations": 100,
+  "timeoutSeconds": 120
+}
+```
+
 | Field                   | Type      | Required | Description                                |
 |-------------------------|-----------|----------|--------------------------------------------|
 | `compounds`             | string[]  | yes      | All compounds in the system                |
@@ -368,6 +415,7 @@ Simulate a chemical reactor with specified reactions and inlet streams.
 | `inletStreams`          | object[]  | yes      | One or more inlet stream definitions       |
 | `reactions`             | object[]  | yes      | Reaction definitions                       |
 | `transient`             | object?   | no       | Required for `simulationMode="dynamic"`    |
+| `headspace`             | float?    | required for vapor-phase CSTR | CSTR vapor headspace volume in m³     |
 | `reactorVolume`         | float?    | no       | Reactor volume in m³                       |
 | `reactorLength`         | float?    | no       | Reactor length in m (PFR)                  |
 | `reactorDiameter`       | float?    | no       | Reactor diameter in m (PFR)                |
@@ -380,6 +428,8 @@ Simulate a chemical reactor with specified reactions and inlet streams.
 | `maxIterations`         | int       | no       | Max solver iterations (default: 100)       |
 | `numberOfSegments`      | int       | no       | PFR discretization segments (default: 10)  |
 | `timeoutSeconds`        | int       | no       | Timeout in seconds (default: 120)          |
+
+`headspace` is only valid for `reactorType: "CSTR"`. For vapor-phase CSTR reactions it is required and must be positive; for `PFR` it is rejected.
 
 **Inlet Stream:**
 

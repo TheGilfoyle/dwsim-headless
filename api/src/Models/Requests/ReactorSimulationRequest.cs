@@ -70,5 +70,8 @@ public record ReactorSimulationRequest(
     double ConvergenceTolerance = 1e-6,
     int MaxIterations = 100,
     int NumberOfSegments = 10,
-    int TimeoutSeconds = 120
+    int TimeoutSeconds = 120,
+
+    // Optional CSTR vapor volume (kept last for positional-call compatibility)
+    double? Headspace = null
 );
